@@ -1,0 +1,159 @@
+#! /usr/bin/env ruby
+require 'commander'
+require 'mandrill'
+require 'csv'
+require 'mail'
+
+class TrikleMail
+  extend Commander::Methods
+
+  def self.csv_as_hashes(file, &block)
+    title_row, *data_rows = CSV.read(args[0])
+
+    data_hashes = data_rows.map do |row|
+      title_row.map.with_index do |title, index|
+        [title.downcase.to_sym, row[index]]
+      end.to_h
+    end
+  end
+
+  program :name, 'Trikle Mail'
+  program :version, '0.0.0'
+  program :description, 'Send your bulk email in a trikle over the mandril api'
+
+  default_command :run
+
+  command :smtp do |c|
+    c.syntax = 'trikle-mail smtp csv_of_emails.csv [options]'
+    c.description = 'Send a message to each email in the csv using the template'
+    c.option '--host STRING', String, 'The host of the mail server e.g. <mail.gmail.com>'
+    c.option '--port INTEGER', Integer, 'Port number of the mail server e.g. 587'
+    c.option '--username STRING', String, 'Username to authenticate with mail server'
+    c.option '--password STRING', String, 'Password to authenticate with mail server'
+    c.option '--from STRING', String, 'The email address to send the email from'
+    c.option '--template STRING', String, 'The template to use to send the message'
+    c.option '--html', 'toggle using html to format email, defaults to no'
+    c.option '--subject STRING', String, 'The subject line of the message'
+    c.option '--hours INTEGER', Integer, 'The number of hours over which to send the emails'
+    c.option '--minutes INTEGER', Integer, 'The number of minutes over which to send the emails'
+
+    c.action do |args, options|
+      data_hashes = csv_as_hashes(CSV.read(args[0]))
+
+      # Check for journal, if found resume
+      if File.exist?('./journal.csv')
+        puts 'Resuming from journal file.'
+        sent = csv_as_hashes(CSV.read('./journal.csv')).
+          reduce([]) { |h, (k, v)| k == :email ? h + [v] : h }
+        data_hashes = data_hashes.select { |h| !sent[h[:email]] }
+      end
+
+      options.default({hours: 0, minutes: 0, html: false})
+
+      time_range = ((options.hours * 60 * 60) + (options.minutes * 60)) /
+        data_hashes.length.to_f
+
+      template = File.read(hash.fetch(:template, options.template))
+
+      data_hashes.each do |hash|
+        content = template.gsub(/%(?!{)/, '%%') % hash
+
+        mail = Mail.new do
+          from hash.fetch(:from, options.from)
+          to hash.fetch(:to, hash.fetch(:email) { raise 'no email address found in to column!' })
+          subject hash.fetch(:subject, options.subject)
+
+          if options.html
+            html_part do
+              content_type 'text/html; charset=UTF-8'
+              body template
+            end
+          else
+            text_part do
+              body template
+            end
+          end
+        end
+
+        mail.delivery_method :smtp, {
+          address: hash.fetch(:host, options.host),
+          port: hash.fetch(:port, options.port),
+          user_name: hash.fetch(:username, options.username),
+          password: hash.fetch(:password, options.password),
+          authentication: :login,
+          enable_starttls_auto: true
+        }
+
+        puts mail.deliver!
+        random_wait_time = rand(0..time_range)
+        puts "waiting #{random_wait_time} seconds"
+        sleep(random_wait_time)
+      end
+    end
+  end
+
+  command :run do |c|
+    c.syntax = 'trikle-mail csv_of_emails.csv [options]'
+    c.description = 'Send a message to each email address in the csv'
+    c.option '--apikey STRING', String, 'The Mandrill API key'
+    c.option '--from_email STRING', String, 'The email address of the sender'
+    c.option '--from_name STRING', String, 'The name of the sender'
+    c.option '--subject STRING', String, 'The subject line of the message'
+    c.option '--template STRING', String, 'The template slug of the message template'
+    c.option '--subaccount STRING', String, 'The mandril subaccount for this batch of email'
+    c.option '--hours INTEGER', Integer, 'The number of hours over which to send the emails'
+    c.option '--minutes INTEGER', Integer, 'The number of minutes over which to send the emails'
+
+    c.action do |args, options|
+      api = Mandrill::API.new(options.apikey)  
+
+      data_hashes = csv_as_hashes(CSV.read(args[0]))
+
+      options.default({hours: 0, minutes: 0})
+      time_range = ((options.hours * 60 * 60) + (options.minutes * 60)) /
+        data_hashes.length.to_f
+
+      data_hashes.each do |hash|
+        response = api.messages.send_template(
+          hash['template'] || options.template,
+          [],
+          {
+            subaccount: hash['subaccount'] || options.subaccount,
+            subject: hash['subject'] || options.subject,
+            from_email: hash['from_email'] || options.from_email,
+            from_name: hash['from_name'] || options.from_name,
+            to: [{
+              email: hash['email'],
+              name: hash['name'],
+              type: 'to'
+            }],
+            merge_vars: [{
+              rcpt: hash['email'],
+              vars: hash.map { |key, value| { name: key, content: value } }
+            }]
+          }
+        )
+        TrikleMail.log(response)
+        random_wait_time = rand(0..time_range)
+        puts "waiting #{random_wait_time} seconds"
+        sleep(random_wait_time)
+      end
+    end
+  end
+
+  def self.log(json)
+    Array(json).each do |entry|
+      # write to log file
+      File.open('./log.json', 'a') { |f| f.write(JSON.dump(entry) + "\n") }
+      # write nicely to cli
+      puts [
+        entry['status'],
+        'email to',
+        entry['email'],
+        entry['reject_reason'] ? "becuase #{entry['reject_reason']}" : ''
+      ].join(' ')
+    end
+  end
+end
+
+TrikleMail.run!
