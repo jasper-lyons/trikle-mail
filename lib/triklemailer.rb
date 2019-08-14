@@ -2,8 +2,12 @@ require 'mail'
 require 'csv'
 
 module Triklemailer
-  VERSION = '0.0.6'
-  Options = Struct.new(:template, :template_name, :is_html, :from, :subject, keyword_init: true)
+  VERSION = '0.0.7'
+  Options = Struct.new(
+    :template, :template_name, :is_html, :from, :subject,
+    :host, :port, :username, :password,
+    keyword_init: true
+  )
 
   # It should take:
   # * A list of emails and data
@@ -78,18 +82,19 @@ module Triklemailer
           options.template_name)
       rescue => e
         puts "Failed to send email to #{recipient[:email]}."
+        puts e
         next
       end
     end
   end
 
-  def log_sent(email, template)
-    log_file_name = ['sent', template.split('.').first].join('_')
+  def self.log_sent(email, template)
+    log_file_name = "./#{['sent', template.split('.').first].join('_')}.csv"
 
     CSV.open(
-      "./#{log_file_name}.csv",
+      log_file_name,
       'a',
-      write_headers: true,
+      write_headers: !File.exists?(log_file_name),
       headers: ['email', 'sent_at']
     ) do |csv|
       csv << [email, Time.now]

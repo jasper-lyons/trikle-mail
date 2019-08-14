@@ -29,16 +29,25 @@ class TrikleMail
     c.option '--minutes INTEGER', Integer, 'The number of minutes over which to send the emails'
 
     c.action do |args, options|
-      recipients = CSV.new(args[0], headers: true).map(&:to_h)
-      sent_file_name = ['sent', options.template.split('.').first].join('_')
-      sent = CSV.new(sent_file_name, headers: true).map { |r| r[:email] }
+      recipients = CSV.new(File.new(args[0]), headers: true, header_converters: :symbol).map(&:to_h)
+      sent_file_name = "./#{['sent', options.template.split('.').first].join('_')}.csv"
+      sent =
+        if File.exists?(sent_file_name)
+          CSV.new(File.new(sent_file_name), headers: true, header_converters: :symbol).map { |r| r[:email] }
+        else
+          []
+        end
 
       mail_options = Triklemailer::Options.new(
         template: File.read(options.template),
         template_name: options.template,
         is_html: options.template.end_with?('html'),
         from: options.from,
-        subject: options.subject
+        subject: options.subject,
+        port: options.port,
+        host: options.host,
+        username: options.username,
+        password: options.password
       )
 
       Triklemailer.send_mail(mail_options, recipients, sent)
